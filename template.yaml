@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Zero-Ops Incident Triage with Step Functions and Amazon Bedrock
+
+Parameters:
+  AlertEmail:
+    Type: String
+    Description: Email address to receive automated incident post-mortems
+
+Resources:
+  IncidentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: incident_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: incident_id
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  IncidentAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Protocol: email
+          Endpoint: !Ref AlertEmail
+
+  AnalyzeIncidentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.12
+      Handler: app.lambda_handler
+      CodeUri: src/
+      Timeout: 30
+      MemorySize: 256
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
+              Resource: "*"
+
+  IncidentWorkflowStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Definition:
+        Comment: Orchestrates AI root-cause analysis, DynamoDB persistence, and SNS notification
+        StartAt: AnalyzeWithBedrock
+        States:
+          AnalyzeWithBedrock:
+            Type: Task
+            Resource: !GetAtt AnalyzeIncidentFunction.Arn
+            ResultPath: "$.analysis"
+            Next: SaveToDynamoDB
+          SaveToDynamoDB:
+            Type: Task
+            Resource: arn:aws:states:::dynamodb:putItem
+            Parameters:
+              TableName: !Ref IncidentsTable
+              Item:
+                incident_id:
+                  S.$: "$.analysis.incident_id"
+                service:
+                  S.$: "$.service"
+                severity:
+                  S.$: "$.analysis.severity"
+                summary:
+                  S.$: "$.analysis.summary"
+                remediation:
+                  S.$: "$.analysis.remediation"
+                timestamp:
+                  S.$: "$.analysis.timestamp"
+            ResultPath: "$.db_result"
+            Next: NotifyOnCall
+          NotifyOnCall:
+            Type: Task
+            Resource: arn:aws:states:::sns:publish
+            Parameters:
+              TopicArn: !Ref IncidentAlertsTopic
+              Subject.$: "States.Format('[{}] Incident Post-Mortem: {}', $.analysis.severity, $.service)"
+              Message.$: "States.Format('Incident ID: {}\nService: {}\nSeverity: {}\n\nRoot Cause & Summary:\n{}\n\nRecommended AWS CLI Remediation:\n{}', $.analysis.incident_id, $.service, $.analysis.severity, $.analysis.summary, $.analysis.remediation)"
+            End: true
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref AnalyzeIncidentFunction
+        - DynamoDBWritePolicy:
+            TableName: !Ref IncidentsTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt IncidentAlertsTopic.TopicName
+
+  TriggerWorkflowFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Runtime: python3.12
+      Handler: trigger.lambda_handler
+      CodeUri: src/
+      Timeout: 10
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref IncidentWorkflowStateMachine
+      Policies:
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt IncidentWorkflowStateMachine.Name
+      Events:
+        IncidentWebhook:
+          Type: HttpApi
+          Properties:
+            Path: /incident
+            Method: post
+
+Outputs:
+  WebhookApiUrl:
+    Description: Public HTTP API endpoint to submit incidents
+    Value: !Sub "https://${ServerlessHttpApi}.execute-api.${AWS::Region}.amazonaws.com/incident"
+  StateMachineArn:
+    Description: Step Functions State Machine ARN
+    Value: !Ref IncidentWorkflowStateMachine
