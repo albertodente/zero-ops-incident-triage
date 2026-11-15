@@ -1,6 +1,3 @@
-cd ~/zero-ops-triage
-
-cat << 'EOF' > README.md
 # Zero-Ops Incident Triage with AWS Step Functions & Amazon Bedrock
 
 Serverless, event-driven incident triage pipeline built with **AWS SAM**, **Amazon API Gateway (HTTP API)**, **AWS Lambda**, **AWS Step Functions**, **Amazon Bedrock (`amazon.nova-lite-v1:0`)**, **Amazon DynamoDB**, and **Amazon SNS**.
