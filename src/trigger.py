@@ -6,6 +6,18 @@ sfn = boto3.client("stepfunctions")
 STATE_MACHINE_ARN = os.environ["STATE_MACHINE_ARN"]
 
 def lambda_handler(event, context):
+    method = event.get("requestContext", {}).get("http", {}).get("method", "POST")
+    if method == "GET":
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "application/json"},
+            "body": json.dumps({
+                "service": "Zero-Ops Incident Triage API",
+                "status": "ONLINE",
+                "usage": "Send a POST request with JSON payload: {'service': '...', 'region': 'us-east-1', 'error_message': '...'}"
+            })
+        }
+
     body = json.loads(event.get("body") or "{}")
     payload = {
         "service": body.get("service", "unknown-service"),

@@ -111,6 +111,11 @@ Resources:
           Properties:
             Path: /incident
             Method: post
+        IncidentInfo:
+          Type: HttpApi
+          Properties:
+            Path: /incident
+            Method: get
 
 Outputs:
   WebhookApiUrl:
